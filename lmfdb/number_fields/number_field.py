@@ -1055,6 +1055,20 @@ class NFSearchArray(SearchArray):
                 display_knowl("nf.nickname", "field nickname"),
             example="x^2-5")
         count = CountBox()
+        '''
+        galois = SelectBox(
+            name = "gal_props"
+            label = "Galois properties"
+            knowl = "nf.galois_group" # or possibly nf.is_galois
+            options = [
+            ("",""),
+            ("TODO","Not Galois"),
+            ("TODO","Galois"),
+            ("TODO","Abelian Galois"),
+            ("TODO","Non-abelian Galois"),
+            ("TODO","Cyclic Galois")
+            ]
+        '''
 
         self.browse_array = [
             [degree, signature],
