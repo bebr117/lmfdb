@@ -67,7 +67,7 @@ cycloinfo = {'4.0.125.1': 5, '6.0.16807.1': 7, '4.0.256.1': 8,
   '32.0.47330370277129322496000000000000000000000000.1':120,
   '40.0.118511797886229481159007653491590053243629014721874976833536.1':132}
 # Real cyclotomic subfields
-rcycloinfo = {'3.3.49.1': 7, '3.3.81.1': 9, '5.5.14641.1': 11, 
+rcycloinfo = {'3.3.49.1': 7, '3.3.81.1': 9, '5.5.14641.1': 11,
   '6.6.371293.1': 13, '4.4.1125.1':15, '4.4.2048.1':16,
   '8.8.410338673.1':17, '9.9.16983563041.1':19, '4.4.2000.1':20,
   '6.6.453789.1':21, '11.11.41426511213649.1':23, '4.4.2304.1':24,
@@ -182,7 +182,7 @@ for n, label in list(rcyclolookup.items()):
         rcyclolookup[2 * n] = label
 
 def na_text():
-    return "Not computed"
+    return "not computed"
 
 ## Turn a list into a string (without brackets)
 
@@ -249,7 +249,7 @@ def psum(val, li):
 def decodedisc(ads, s):
     return ZZ(ads[3:]) * s
 
-def formatfield(coef, show_poly=False):
+def formatfield(coef, show_poly=False, missing_text=None):
     r"""
       Take a list of coefficients (which can be a string like '1,3,1'
       and either produce a number field knowl if the polynomial matches
@@ -270,7 +270,10 @@ def formatfield(coef, show_poly=False):
             return '$'+mypol+'$'
 
         mypol = mypol.replace(' ','').replace('+','%2B').replace('{', '%7B').replace('}','%7d')
-        mypol = '<a title = "Field missing" knowl="nf.field.missing" kwargs="poly=%s">Deg %d</a>' % (mypol,deg)
+        if missing_text is None:
+            mypol = '<a title = "Field missing" knowl="nf.field.missing" kwargs="poly=%s">Deg %d</a>' % (mypol,deg)
+        else:
+            mypol = '<a title = "Field missing" knowl="nf.field.missing" kwargs="poly=%s">%s</a>' % (mypol,missing_text)
         return mypol
     return nf_display_knowl(thefield.get_label(),thefield.field_pretty())
 
@@ -391,6 +394,10 @@ class WebNumberField:
         if self.label == 'a':
             return None
         return self.label
+
+    def label_pretty(self):
+        from lmfdb.number_fields.number_field import nf_label_pretty
+        return nf_label_pretty(self.label)
 
     def field_pretty(self):
         return field_pretty(self.get_label())
@@ -517,7 +524,7 @@ class WebNumberField:
             if galord<48:
                 del repcounts[galord]
                 if self.degree() < galord:
-                    gc = 1 
+                    gc = 1
             if numae>0:
                 repcounts[self.degree()] -= numae
             if repcounts[self.degree()] == 0:
@@ -726,7 +733,7 @@ class WebNumberField:
             return na_text()
         cg_list = self._data['class_group']
         if not cg_list:
-            return 'Trivial'
+            return 'trivial'
         return '$%s$'%str(cg_list)
 
     def class_group_invariants_raw(self):

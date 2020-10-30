@@ -286,7 +286,7 @@ class PostgresStatsTable(PostgresBase):
 
         - ``query`` -- a mongo-style dictionary, as in the ``search`` method.
         - ``split_list`` -- see the ``add_stats`` method.
-        - ``record`` -- boolean (default False).  Whether to store the result in the count table.
+        - ``record`` -- boolean (default True).  Whether to store the result in the count table.
         - ``suffix`` -- if provided, the table with that suffix added will be
             used to perform the count
         - ``extra`` -- used if the result is recorded (see discussion at the top of this class).
@@ -322,7 +322,7 @@ class PostgresStatsTable(PostgresBase):
         """
         cols, vals = self._split_dict(query)
         data = [count, cols, vals, split_list]
-        if self.quick_count(query) is None:
+        if self.quick_count(query, suffix=suffix) is None:
             updater = SQL("INSERT INTO {0} (count, cols, values, split, extra) VALUES (%s, %s, %s, %s, %s)")
             data.append(extra)
         else:
@@ -385,6 +385,96 @@ class PostgresStatsTable(PostgresBase):
             print(selecter)
             cur = self._execute(selecter, values)
             return {tuple(rec[1:]): int(rec[0]) for rec in cur}
+
+    def quick_count_distinct(self, col, query={}, suffix=""):
+        """
+        Tries to quickly determine the number of distinct values of a column
+        using the stats table.
+
+        INPUT:
+
+        - ``col`` -- a string, the name of a column
+        - ``query`` -- a search query, as a dictionary
+        - ``suffix`` -- if provided, the table with that suffix added will be
+            used to perform the count
+
+        OUTPUT:
+
+        Either an integer giving the number of distinct values, or None if not cached.
+        """
+        ccols, cvals = self._split_dict(query)
+        selecter = SQL("SELECT value FROM {0} WHERE stat = %s AND cols = %s AND constraint_cols = %s AND constraint_values = %s").format(Identifier(self.stats + suffix))
+        cur = self._execute(selecter, ["distinct", Json([col]), ccols, cvals])
+        if cur.rowcount:
+            return int(cur.fetchone()[0])
+
+    def _slow_count_distinct(self, col, query={}, record=True, suffix=""):
+        """
+        No shortcuts: actually count the number of distinct values in the search table.
+
+        INPUT:
+
+        - ``col`` -- a string, the name of a column
+        - ``query`` -- a search query, as a dictionary
+        - ``record`` -- boolean (default True).  Whether to store the result in the stats table.
+        - ``suffix`` -- if provided, the table with that suffix added will be
+            used to perform the count
+
+        OUTPUT:
+
+        The number of distinct values taken on by the specified column among rows satisfying the constraint.
+        """
+        selecter = SQL("SELECT COUNT(DISTINCT {0}) FROM {1}").format(Identifier(col), Identifier(self.search_table))
+        qstr, values = self.table._parse_dict(query)
+        if qstr is not None:
+            selecter = SQL("{0} WHERE {1}").format(selecter, qstr)
+        cur = self._execute(selecter, values)
+        nres = cur.fetchone()[0]
+        if record and self.saving:
+            self._record_count_distinct(col, query, nres, suffix)
+        return nres
+
+    def _record_count_distinct(self, col, query, count, suffix=""):
+        """
+        Add the count to the stats table.
+
+        INPUT:
+
+        - ``col`` -- a string, the name of a column
+        - ``query`` -- a search query, as a dictionary
+        - ``count`` -- the number of distinct values taken on by the column
+        - ``suffix`` -- if provided, the table with that suffix added will be
+            used to perform the count
+        """
+        ccols, cvals = self._split_dict(query)
+        data = [count, Json([col]), "distinct", ccols, cvals]
+        if self.quick_count_distinct(col, query, suffix=suffix) is None:
+            updater = SQL("INSERT INTO {0} (value, cols, stat, constraint_cols, constraint_values) VALUES (%s, %s, %s, %s, %s)")
+        else:
+            updater = SQL("UPDATE {0} SET value = %s WHERE cols = %s AND stats = %s AND constraint_cols = %s AND constraint_values = %s")
+        try:
+            # This will fail if we don't have write permission,
+            # for example, if we're running as the lmfdb user
+            self._execute(updater.format(Identifier(self.stats + suffix)), data)
+        except DatabaseError:
+            raise
+
+    def count_distinct(self, col, query={}, record=True):
+        """
+        Count the number of distinct values taken on by a given column.
+
+        The result will be the same as taking the length of the distinct values, but a bit faster and caches the answer
+
+        INPUT:
+
+        - ``col`` -- the name of the column
+        - ``query`` -- a query dictionary constraining which rows are considered
+        - ``record`` -- (default True) whether to record the number of results in the stats table.
+        """
+        nres = self.quick_count_distinct(col, query)
+        if nres is None:
+            nres = self._slow_count_distinct(col, query, record=record)
+        return int(nres)
 
     def column_counts(self, cols, constraint=None, threshold=None, split_list=False):
         """
@@ -1098,11 +1188,11 @@ class PostgresStatsTable(PostgresBase):
         from sage.all import cartesian_product_iterator
         if split_list and threshold is not None:
             raise ValueError("split_list and threshold not simultaneously supported")
+        cols = sorted(cols)
         where, values, constraint, ccols, cvals, allcols = self._process_constraint(cols, constraint)
         if self._has_stats(Json(cols), ccols, cvals, threshold, split_list):
             self.logger.info("Statistics already exist")
             return
-        cols = sorted(cols)
         now = time.time()
         seen_one = False
         if split_list:
@@ -1531,7 +1621,7 @@ ORDER BY v.ord LIMIT %s"""
         """
         selecter_constraints = [SQL("split = %s"), SQL("cols = %s")]
         if constraint:
-            allcols = sorted(list(set(cols + list(constraint))))
+            allcols = sorted(set(cols + list(constraint)))
             selecter_values = [split_list, Json(allcols)]
             for i, x in enumerate(allcols):
                 if x in constraint:
@@ -1551,9 +1641,9 @@ ORDER BY v.ord LIMIT %s"""
                             else:
                                 raise ValueError("Unsupported constraint key: %s" % k)
                             selecter_constraints.append(SQL(
-                                "(values->{0}?%s AND (values->{0}->>%s)::{1} {3} %s) OR "
+                                "((values->{0}?%s AND (values->{0}->>%s)::{1} {3} %s) OR "
                                 "(values->{0}?%s AND (values->{0}->>%s)::{1} {2} %s) OR "
-                                "(jsonb_typeof(values->{0}) = %s AND (values->>{0})::{1} {2} %s)".format(
+                                "(jsonb_typeof(values->{0}) = %s AND (values->>{0})::{1} {2} %s))".format(
                                     i, typ, op, oe)))
                             selecter_values.extend([k, k, v, ko, ko, v, "number", v])
                     else:
